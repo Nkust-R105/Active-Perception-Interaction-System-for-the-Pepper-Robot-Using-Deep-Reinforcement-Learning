@@ -1,0 +1,180 @@
+import logging
+import random
+import gym
+from gym import spaces
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+# 设置日志级别
+logging.basicConfig(level=logging.ERROR)
+
+class GridEnv3(gym.Env):
+    metadata = {
+        'render.modes': ['human', 'rgb_array'],
+        'video.frames_per_second': 2
+    }
+
+    def __init__(self):
+        self.local_x = 0
+        self.local_y = 0
+        self.facebox = 40
+        self.count = 0
+        self.scale = 1
+
+        self.local_x_before = 0
+        self.local_y_before = 0
+        self.facebox_before = 0
+        self.local_start_flag = 1
+        self.face_flag = 0
+
+        # 动作空间定义
+        self.action_space = spaces.Discrete(6)  # 6个离散动作
+        
+        # 状态空间定义
+        self.observation_space = spaces.Box(low=np.array([0.0, 0.0, 0.0]), high=np.array([1.0, 1.0, 0.25]), dtype=np.float32)
+
+        self.gamma = 0.8
+        self.state = None
+        self.viewer = None
+
+    def _seed(self, seed=None):
+        random.seed(seed)
+        np.random.seed(seed)
+        return [seed]
+
+    def step(self, action):
+        self.count += 1
+        right_left_action = 0
+        up_down_action = 0
+        go_back_action = 0
+        self.face_flag = 0
+        
+        # 确保动作值在有效范围内
+        action = int(action)
+
+        if action == 0:
+            right_left_action = 0.05
+        elif action == 1:
+            right_left_action = -0.05
+        elif action == 2:
+            up_down_action = 0.05
+        elif action == 3:
+            up_down_action = -0.05
+        elif action == 4:
+            go_back_action = 0.01
+            self.face_flag = 1
+        elif action == 5:
+            go_back_action = -0.01
+            self.face_flag = 1
+
+        # 状态转移
+        self.local_x_before = self.local_x
+        self.local_y_before = self.local_y
+        self.facebox_before = self.facebox
+        self.local_x += right_left_action
+        self.local_y += up_down_action
+        self.facebox += go_back_action
+
+        # 奖励计算
+        reward = -1
+        done = False
+
+        if self.local_x > 1 or self.local_x < 0 or self.local_y > 1 or self.local_y < 0 or self.facebox < 0 or self.facebox > 0.25:
+            reward = -100
+            done = True
+        else:
+            self.state = [self.local_x, self.local_y, self.facebox]
+            
+            if self.face_flag == 1:
+                if self.facebox_before <= 0.015 and self.facebox_before >= 0.075:
+                    if self.facebox <= 0.015 and self.facebox >= 0.075:
+                        reward = -1
+                    else:
+                        reward = -1
+                elif self.facebox_before > 0.075:
+                    if self.facebox < self.facebox_before:
+                        reward = 10
+                    else:
+                        reward = -1
+                elif self.facebox_before < 0.015:
+                    if self.facebox > self.facebox_before:
+                        reward = 10
+                    else:
+                        reward = -1
+            else:
+                dis_before = (self.local_x_before - 0.5)**2 + (self.local_y_before - 0.5)**2
+                dis_now = (self.local_x - 0.5)**2 + (self.local_y - 0.5)**2
+                if dis_now < dis_before:
+                    reward = 1
+                else:
+                    reward = -1
+
+            if self.local_x < 0.6 and self.local_x > 0.4 and self.local_y < 0.6 and self.local_y > 0.4 and self.facebox < 0.075 and self.facebox > 0.015:
+                done = True
+                reward = 1000
+
+        return self.state, reward, done, {}
+
+    def reset(self):
+        start_x = random.randint(0, 100)
+        start_y = random.randint(0, 100)
+        start_face = random.randint(0, 25)
+
+        self.count = 0
+        self.local_x = start_x / 100
+        self.local_y = start_y / 100
+        self.facebox = start_face / 100
+
+        self.state = [self.local_x, self.local_y, self.facebox]
+        
+        return self.state
+
+    def render(self, mode='human'):
+        if mode == 'human':
+            plt.ion()
+            if not hasattr(self, 'fig'):
+                self.fig, self.ax = plt.subplots(figsize=(6, 4))
+            self.ax.clear()
+
+            # 绘制中心点格线
+            self.ax.plot([0, 640], [240, 240], color='black')
+            self.ax.plot([320, 320], [0, 480], color='black')
+
+            # 绘制方块
+            rect = patches.Rectangle((self.local_x * 640 - 20, self.local_y * 480 - 20), 40, 40, linewidth=1, edgecolor='blue', facecolor='blue')
+            self.ax.add_patch(rect)
+
+            # 绘制脸部
+            circle = patches.Circle((self.local_x * 640, self.local_y * 480), self.scale * 10, edgecolor='green', facecolor='green')
+            self.ax.add_patch(circle)
+
+            self.ax.set_xlim(0, 640)
+            self.ax.set_ylim(0, 480)
+            self.ax.invert_yaxis()
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
+        elif mode == 'rgb_array':
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.plot([0, 640], [240, 240], color='black')
+            ax.plot([320, 320], [0, 480], color='black')
+
+            rect = patches.Rectangle((self.local_x * 640 - 20, self.local_y * 480 - 20), 40, 40, linewidth=1, edgecolor='blue', facecolor='blue')
+            ax.add_patch(rect)
+
+            circle = patches.Circle((self.local_x * 640, self.local_y * 480), self.scale * 10, edgecolor='green', facecolor='green')
+            ax.add_patch(circle)
+
+            ax.set_xlim(0, 640)
+            ax.set_ylim(0, 480)
+            plt.gca().invert_yaxis()
+
+            # Save the figure to a buffer and return it as an RGB array
+            fig.canvas.draw()
+            image = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8).reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            plt.close(fig)
+            return image
+    def close(self):
+        if plt.get_fignums():
+            plt.ioff()
+            plt.close('all')
