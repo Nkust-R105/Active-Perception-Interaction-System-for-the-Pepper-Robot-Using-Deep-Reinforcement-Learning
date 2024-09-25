@@ -1,0 +1,579 @@
+import logging
+import random
+import gym
+from gym import spaces, logger
+import numpy as np
+import math as math
+
+#最終版
+
+logger = logging.getLogger(__name__)
+gym.logger.set_level(40)
+
+class PepperEnv5(gym.Env):
+    metadata = {
+        'render.modes': ['human', 'rgb_array'],
+        'video.frames_per_second': 2
+    }
+
+    def __init__(self):
+        #self.max_episode_steps = 400
+        self.face_x = 0
+        self.face_y = 0
+        self.body_x = 0
+        self.body_y = 0
+        self.see_face_x = 0
+        self.see_face_y = 0
+        self.see_body_x = 0
+        self.see_body_y = 0
+        self.vision_x = 0
+        self.vision_y = 0
+        self.sound = 0
+        self.sound_origin = 0
+        self.location = 0
+        self.people = 0 #有人還是沒人
+        self.face_x_before = 0     #儲存前一刻臉部位置x
+        self.face_y_before = 0     #儲存前一刻臉部位置y
+        self.body_x_before = 0
+        self.body_y_before = 0
+        self.vision_x_before = 0
+        self.vision_y_before = 0
+        self.sound_before = 0
+        self.case = 0
+ 
+        self.local_start_flag = 1   #紀錄是否為第一次儲存前一刻的臉部位置
+        self.face_flag = 0
+        self.action_space = ['wait', 'body_left', 'body_right', 'left', 'right'
+                                , 'up', 'down', 'back', 'go']
+        self.n_actions = len(self.action_space)
+        self.state_space = ['face_x', 'face_y', 'body_x', 'body_y'
+                                , 'sound', 'distance']
+        self.distance = 0
+        self.n_state = len(self.state_space)
+
+        self.gamma = 0.8         #折扣因子
+        self.viewer = None
+        self.state = None
+
+    def _seed(self, seed=None):
+        self.np_random, seed = random.seeding.np_random(seed)
+        return [seed]
+
+    def getTerminal(self):
+        return self.terminate_states
+
+    def getcase(self):
+        return self.case
+
+    def getStates(self):
+        return self.states
+
+    def getAction(self):
+        return self.actions
+
+    def getTerminate_states(self):
+        return self.terminate_states
+
+    def setAction(self,s):
+        self.state=s
+
+    def step(self, action):
+        #當前狀態
+        state = self.state
+        self.count = self.count + 1
+        reward = -1
+        done = False
+        action = int(action)
+        #狀態轉移
+        self.face_x_before = self.face_x
+        self.face_y_before = self.face_y     
+        self.body_x_before = self.body_x
+        self.body_y_before = self.body_y
+        self.vision_x_before = self.vision_x
+        self.vision_y_before = self.vision_y
+        self.sound_before = self.sound
+        self.dis_before = self.distance
+        distance1 = 0
+        if self.people == 1:       #有人的情況
+            #self.action_space = ['wait', 'left1', 'right1', 'left', 'right', 'up', 'down']
+            if action == 1:       #身體左轉
+                self.face_x = self.face_x + 5
+                self.body_x = self.body_x + 5
+                if self.sound_origin > -180:
+                    self.sound = self.sound + 5
+                self.location = self.location - 5
+                #print("body left")
+            elif action == 2:     #身體右轉
+                self.face_x = self.face_x - 5
+                self.body_x = self.body_x - 5
+                if self.sound_origin > -180:
+                    self.sound = self.sound - 5
+                self.location = self.location + 5
+                #print("body right")
+            elif action == 3:     #左轉
+                self.vision_x = self.vision_x - 1
+                #self.location = self.location - 1
+                #print("left")
+            elif action == 4:     #右轉
+                self.vision_x = self.vision_x + 1
+                #self.location = self.location + 1
+                #print("right")
+            elif action == 5:     #抬頭
+                self.vision_y = self.vision_y + 3
+                #print("up")
+            elif action == 6:     #低頭
+                self.vision_y = self.vision_y - 3
+                #print("down")
+        else:
+            if action == 1:       #身體左轉
+                if self.sound_origin > -180:
+                    self.sound = self.sound + 5
+                self.location = self.location - 5
+            elif action == 2:     #身體右轉
+                if self.sound_origin > -180:
+                    self.sound = self.sound - 5
+                self.location = self.location + 5
+            elif action == 3:     #左轉
+                self.vision_x = self.vision_x - 1
+                #self.location = self.location - 1
+            elif action == 4:     #右轉
+                self.vision_x = self.vision_x + 1
+                #self.location = self.location + 1
+            elif action == 5:     #抬頭
+                self.vision_y = self.vision_y + 3
+            elif action == 6:     #低頭
+                self.vision_y = self.vision_y - 3
+
+        #判斷視覺視角是否超出邊界
+        if self.vision_x < -90 or self.vision_x > 90 or self.vision_y < 0 or self.vision_y > 135 or self.location > 180 or self.location < -180:
+            reward = -10
+            done = True
+        else:
+            #正規化聲音資訊
+            resou = self.sound_origin/180
+            reloc = self.location/180
+            redis = abs(resou-reloc)
+            
+            sound_distance = abs(self.sound - self.vision_x)     #聲音源跟視角的距離
+            sound_distance_before = abs(self.sound_before - self.vision_x_before)    #前一刻聲音源跟視角的距離
+            dis = (sound_distance_before - sound_distance)      #轉動幅度
+            #print ("sound distance : " + str(sound_distance))
+            #print ("sound reward : " + str(dis))
+
+            #身體與視角中心的距離
+            body_dis_x = (self.vision_x - self.body_x)      
+            body_dis_y = (self.vision_y - self.body_y)
+            body_dis_x_before = (self.vision_x_before - self.body_x_before)
+            body_dis_y_before = (self.vision_y_before - self.body_y_before)
+
+            #臉與視角中心的距離
+            face_dis_x = (self.vision_x - self.face_x)
+            face_dis_y = (self.vision_y - self.face_y)
+            face_dis_x_before = (self.vision_x_before - self.face_x_before)
+            face_dis_y_before = (self.vision_y_before - self.face_y_before)
+
+            distance1 = 0
+            reward = -1
+            #print(sound_distance)
+
+            if abs(body_dis_x) > 28 or abs(face_dis_x) > 28 :     #代表人體不在視野內 所以不會有人的狀態
+                self.see_body_x = -1 
+                self.see_body_y = -1
+                self.see_face_x = -1
+                self.see_face_y = -1
+
+            #轉動幅度為5 代表轉身
+            if dis == 5:
+                reward = 2
+
+            if abs(body_dis_x) <= 28 and abs(body_dis_y) <= 22:     #代表人體有在視野內
+                #獲得人的狀態
+                self.see_body_x = np.around(body_dis_x/56,2)
+                self.see_body_y = np.around(body_dis_y/44,2)
+                #獲得聲納距離
+                distance1 = self.distance
+                #如果人體變遠
+                if body_dis_x_before < body_dis_x:
+                    reward = -2
+                
+                if abs(face_dis_y) > 22:     #代表人臉不在視野內
+                    #有人體沒人臉 要抬頭
+                    if action == 5:
+                        reward = 3 -  + (self.distance * 2)
+             
+            if self.case == 2 and abs(body_dis_x) > 28 :
+                if dis == 5:
+                    reward = 2
+                #如果到聲音源附近 還沒看到人 就選擇回歸
+                if sound_distance < 15:
+                    reward = 100
+                    done = True
+            
+            if abs(face_dis_x) <= 28 and abs(face_dis_y) <= 22:     #代表人臉有在視野內
+                self.see_face_x = np.around(face_dis_x/56,2)
+                self.see_face_y = np.around(face_dis_y/44,2)
+                distance1 = self.distance
+                if abs(body_dis_x) <= 28 and abs(body_dis_y) <= 22:     #代表人體有在視野內
+                    self.see_body_x = np.around(body_dis_x/56,2)
+                    self.see_body_y = np.around(body_dis_y/44,2)
+                else:
+                    self.see_body_x = -1 
+                    self.see_body_y = -1       
+                #計算人臉與中心點的直線距離            
+                face_dis = ((face_dis_x/28)**2 + (face_dis_y/22)**2)**(0.5)
+                face_dis_before = ((face_dis_x_before/28)**2 + (face_dis_y_before/22)**2)**(0.5)
+                #print ("face distance : " + str(face_dis))
+                #距離變近就給予獎勵
+                if face_dis < face_dis_before:
+                    reward = 5
+                if face_dis < 0.3:
+                    #對齊人臉後 根據距離決定動作
+                    if distance1 <= 0.5:
+                        if action == 7:
+                            reward = 100
+                            done = True
+                    if distance1 > 0.5:    
+                        if action == 0:
+                            reward = 100
+                            done = True     
+            #print("sound_distance:")                                      
+            #print(sound_distance)
+            #如果沒有人
+            if self.people == 0:
+                self.see_body_x = -1 
+                self.see_body_y = -1
+                self.see_face_x = -1
+                self.see_face_y = -1
+                distance1 = 0
+                if self.sound_origin > -180:
+                    if sound_distance >= 15:
+                        if dis == 5:
+                            reward = 2
+                        else:
+                            reward = -1     
+                    elif redis >= 0:
+                        if action == 8:
+                            reward = 100
+                            done = True
+                            #print("retain")
+                else:
+                    if action == 0:
+                        reward = 100
+                        done = True
+                        #print("wait")
+                
+            #print ("reward = " + str(reward))
+        self.state = [self.see_face_x, self.see_face_y, self.see_body_x, self.see_body_y, np.around(self.sound_origin, 2), distance1]
+        resou = self.sound_origin/180
+        reloc = self.location/180
+        redis = resou-reloc
+        state_retain = [self.see_face_x, self.see_face_y, self.see_body_x, self.see_body_y, np.around(redis,2), distance1]
+        return state_retain, reward, done,{}
+
+    def reset(self):
+        start_sound_level = 0
+        start_distance = 0
+        self.distance = random.randint(0,100)
+        #隨機產生0~99的值
+        episode = random.randint(0,99)
+        if episode < 20:
+            #case1 有聲音產生且聲音源處有人
+            #聲音範圍0~360度
+            start_sound = random.randint(-180,180)
+            self.case = 1       #有聲音且人在聲音源
+            #人體的x座標跟聲音一樣 y座標會在視野範圍內
+            start_body_x = start_sound
+            start_body_y = random.randint(40,80)
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = start_body_x + random.randint(-2,2)
+            start_face_y = start_body_y + random.randint(10,50)
+            self.people = 1
+        elif episode >= 20 and episode < 40:
+            #case2 有聲音產生但眼前有人
+            #聲音範圍0~360度
+            start_sound = random.randint(-180,180)
+            self.case = 2       #有聲音但人不在聲音源
+            #人體的x座標在視野範圍內 y座標會在視野範圍內
+            start_body_x = random.randint(-28,28)
+            start_body_y = random.randint(39,81)
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = start_body_x + random.randint(-2,2)
+            start_face_y = start_body_y + random.randint(10,50)
+            self.people = 1
+        elif episode >= 40 and episode < 60:
+            #case3 有聲音產生但聲音源處沒有人
+            #聲音範圍0~360度
+            start_sound = random.randint(-180,180)            
+            self.case = 3       #有聲音產生但聲音源處沒有人
+            #沒有人 所以都預設為0
+            start_body_x = 0
+            start_body_y = 0
+            start_face_x = 0
+            start_face_y = 0
+            self.people = 0
+        elif episode >= 60 and episode < 80:
+            #case4 沒有聲音但眼前有人
+            start_sound = -360
+            self.case = 4       #沒有聲音但眼前有人
+            #人體的x座標在視野範圍內 y座標會在視野範圍內
+            start_body_x = random.randint(-28,28)
+            start_body_y = random.randint(39,81)
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = start_body_x + random.randint(-2,2)
+            start_face_y = start_body_y + random.randint(10,50)
+            self.people = 1       
+        elif episode >= 80 and episode < 100:
+            #case5 沒有聲音也沒有人
+            start_sound = -360
+            self.case = 5       #沒有聲音但眼前有人
+            #人體的x座標在視野範圍內 y座標會在視野範圍內
+            start_body_x = 0
+            start_body_y = 0
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = 0
+            start_face_y = 0
+            self.people = 0             
+
+
+        #視角一開始在正中間
+        start_vision_x = 0
+        start_vision_y = 65
+
+        self.location = 0
+        self.count = 0
+        self.face_x = start_face_x
+        self.face_y = start_face_y 
+        self.body_x = start_body_x
+        self.body_y = start_body_y
+        self.vision_x = start_vision_x
+        self.vision_y = start_vision_y
+        self.sound = start_sound
+        self.sound_origin = start_sound
+        self.distance = self.distance/100
+
+        #判斷初始位置有沒有剛好在視覺視角內
+        if self.body_x >= -28 and self.body_x <= 28:
+            body_dis_x = (self.vision_x - self.body_x)
+            body_dis_y = (self.vision_y - self.body_y)
+
+            self.see_body_x = np.around(body_dis_x/56,2)
+            self.see_body_y = np.around(body_dis_y/44,2)
+            start_distance = self.distance
+        else:
+            self.see_body_x = -1
+            self.see_body_y = -1
+            start_distance = 0
+        if self.face_x >= -28 and self.face_x <= 28 and self.face_y >= 39 and self.face_y <= 81:
+            face_dis_x = (self.vision_x - self.face_x)
+            face_dis_y = (self.vision_y - self.face_y)
+
+            self.see_face_x = np.around(face_dis_x/56,2)
+            self.see_face_y = np.around(face_dis_y/44,2)
+            start_distance = self.distance
+        else:
+            self.see_face_x = -1
+            self.see_face_y = -1  
+
+        if self.case == 3 or self.case == 5:
+            self.face_x = 0
+            self.face_y = 0
+            self.body_x = 0
+            self.body_y = 0
+            self.see_body_x = -1
+            self.see_body_y = -1
+            self.see_face_x = -1
+            self.see_face_y = -1         
+            start_distance = 0
+            self.distance = 0
+        print ("Case" + str(self.case))
+        #self.face_x, self.face_y, self.body_x, self.body_y 為隱藏狀態，除非視野有出現，不然模型不會知道值
+
+        #self.state = [self.face_x, self.face_y, self.body_x, self.body_y, self.vision_x, self.vision_y, self.sound, self.looking, self.distance]
+        self.state = [self.see_face_x, self.see_face_y, self.see_body_x, self.see_body_y, self.sound, start_distance]
+        #print(self.state)
+        resound = self.sound/180
+        state_retain = [self.see_face_x, self.see_face_y, self.see_body_x, self.see_body_y, np.around(resound,2), start_distance]
+        return state_retain
+
+    def testCase(self, episode):
+        start_sound_level = 0
+        start_distance = 0
+        
+        if episode < 20:
+            #case1 有聲音產生且聲音源處有人
+            #聲音範圍0~360度
+            start_sound = random.randint(-180,180)
+            self.distance = random.randint(0,100)
+            self.case = 1       #有聲音且人在聲音源
+            #人體的x座標跟聲音一樣 y座標會在視野範圍內
+            start_body_x = start_sound
+            start_body_y = random.randint(40,80)
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = start_body_x + random.randint(-2,2)
+            start_face_y = start_body_y + random.randint(10,50)
+            self.people = 1
+        elif episode >= 20 and episode < 40:
+            #case2 有聲音產生但眼前有人
+            #聲音範圍0~360度
+            start_sound = random.randint(-180,180)
+            self.distance = random.randint(0,100)
+            self.case = 2       #有聲音但人不在聲音源
+            #人體的x座標在視野範圍內 y座標會在視野範圍內
+            start_body_x = random.randint(-28,28)
+            start_body_y = random.randint(39,81)
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = start_body_x + random.randint(-2,2)
+            start_face_y = start_body_y + random.randint(10,50)
+            self.people = 1
+        elif episode >= 40 and episode < 60:
+            #case3 有聲音產生但聲音源處沒有人
+            #聲音範圍0~360度
+            self.distance = 0
+            start_sound = random.randint(-180,180)            
+            self.case = 3       #有聲音產生但聲音源處沒有人
+            start_body_x = 0
+            start_body_y = 0
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = 0
+            start_face_y = 0
+            self.people = 0
+        elif episode >= 60 and episode < 80:
+            self.distance = random.randint(0,100)
+            #case4 沒有聲音但眼前有人
+            start_sound = -360
+            self.case = 4       #沒有聲音但眼前有人
+            #人體的x座標在視野範圍內 y座標會在視野範圍內
+            start_body_x = random.randint(-28,28)
+            start_body_y = random.randint(39,81)
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = start_body_x + random.randint(-2,2)
+            start_face_y = start_body_y + random.randint(10,50)
+            self.people = 1       
+        elif episode >= 80 and episode < 100:
+            self.distance = 0
+            #case5 沒有聲音也沒有人
+            start_sound = -360
+            self.case = 5       #沒有聲音但眼前有人
+            #人體的x座標在視野範圍內 y座標會在視野範圍內
+            start_body_x = 0
+            start_body_y = 0
+            #人臉的x座標會有-2~2的偏移量 y座標則是10~30
+            start_face_x = 0
+            start_face_y = 0
+            self.people = 0             
+
+
+        #視角一開始在正中間
+        start_vision_x = 0
+        start_vision_y = 65
+
+        self.location = 0
+        self.count = 0
+        self.face_x = start_face_x
+        self.face_y = start_face_y 
+        self.body_x = start_body_x
+        self.body_y = start_body_y
+        self.vision_x = start_vision_x
+        self.vision_y = start_vision_y
+        self.sound = start_sound
+        self.sound_origin = start_sound
+        self.distance = self.distance/100
+        #判斷初始位置有沒有剛好在視覺視角內
+        if self.body_x >= -28 and self.body_x <= 28:
+            body_dis_x = (self.vision_x - self.body_x)
+            body_dis_y = (self.vision_y - self.body_y)
+
+            self.see_body_x = np.around(body_dis_x/56,2)
+            self.see_body_y = np.around(body_dis_y/44,2)
+            start_distance = self.distance            
+        else:
+            self.see_body_x = -1
+            self.see_body_y = -1
+            start_distance = 0          
+        if self.face_x >= -28 and self.face_x <= 28 and self.face_y >= 39 and self.face_y <= 81:
+            face_dis_x = (self.vision_x - self.face_x)
+            face_dis_y = (self.vision_y - self.face_y)
+            start_distance = self.distance
+            self.see_face_x = np.around(face_dis_x/56,2)
+            self.see_face_y = np.around(face_dis_y/44,2)
+        else:
+            self.see_face_x = -1
+            self.see_face_y = -1  
+
+        if self.case == 3 or self.case == 5:
+            self.face_x = 0
+            self.face_y = 0
+            self.body_x = 0
+            self.body_y = 0
+            self.see_body_x = -1
+            self.see_body_y = -1
+            self.see_face_x = -1
+            self.see_face_y = -1               
+        print ("Case" + str(self.case))
+        #self.face_x, self.face_y, self.body_x, self.body_y 為隱藏狀態，除非視野有出現，不然模型不會知道值
+
+        #self.state = [self.face_x, self.face_y, self.body_x, self.body_y, self.vision_x, self.vision_y, self.sound, self.looking, self.distance]
+        self.state = [self.see_face_x, self.see_face_y, self.see_body_x, self.see_body_y, self.sound, start_distance]
+        #print(self.state)
+        resound = self.sound/180
+        state_retain = [self.see_face_x, self.see_face_y, self.see_body_x, self.see_body_y, np.around(resound,2), start_distance]
+        return state_retain
+
+    def render(self, mode='human'):
+        from gym.envs.classic_control import rendering
+        screen_width = 360
+        screen_height = 135
+
+        if self.viewer is None:
+
+            self.viewer = rendering.Viewer(screen_width, screen_height)
+
+            self.line1 = rendering.Line((270,0),(270,135))
+            self.line2 = rendering.Line((90, 0), (90, 135))
+
+            #臉部點
+            self.face_point = self.viewer.draw_circle(5)
+            self.face_point.set_color(0.5, 0.5, 0.5)
+            self.facetrans = rendering.Transform()
+            self.face_point.add_attr(self.facetrans)
+            #身體點
+            self.body_point = self.viewer.draw_circle(5)
+            self.body_point.set_color(0, 0.5, 0.5)
+            self.bodytrans = rendering.Transform()
+            self.body_point.add_attr(self.bodytrans)
+            #視野框
+            viswidth=56 #55.7
+            visheight=44 #43.7
+            l,r,t,b = -viswidth/2, viswidth/2, -visheight/2, visheight/2
+            self.robot_point = self.viewer.draw_polygon([(l, b), (l, t), (r, t), (r, b)])
+            self.vistion_box = rendering.Transform(translation=(180, 60))
+            self.robot_point.add_attr(self.vistion_box)
+            self.robot_point.set_color(0, 0, 1)
+            #聲音源
+            self.sound_point = self.viewer.draw_circle(5)
+            self.sound_point.set_color(0.8, 0.8, 0)
+            self.soundtrans = rendering.Transform()
+            self.sound_point.add_attr(self.soundtrans)
+
+            self.line1.set_color(0, 0, 0)
+            self.line2.set_color(0, 0, 0)
+
+            self.viewer.add_geom(self.line1)
+            self.viewer.add_geom(self.line2)
+            self.viewer.add_geom(self.robot_point)
+            self.viewer.add_geom(self.body_point)
+            self.viewer.add_geom(self.face_point)
+            self.viewer.add_geom(self.sound_point)
+
+        if self.state is None: 
+            return None
+        #狀態轉移
+        self.vistion_box.set_translation(self.vision_x + 180, self.vision_y)
+        self.soundtrans.set_translation(self.sound + 180, 65)
+        self.facetrans.set_translation(self.face_x + 180, self.face_y)
+        self.bodytrans.set_translation(self.body_x + 180, self.body_y)
+        return self.viewer.render(return_rgb_array=mode == 'rgb_array')
+
+    def close(self):
+        if self.viewer:
+            self.viewer.close()
