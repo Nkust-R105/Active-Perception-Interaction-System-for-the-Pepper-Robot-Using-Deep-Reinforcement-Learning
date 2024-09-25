@@ -1,0 +1,73 @@
+import socket
+import pickle
+import numpy as np
+import torch
+from torch import nn
+import torch.nn.functional as F
+import os
+import time
+
+#模型架構
+class Net(nn.Module):
+    def __init__(self, n_states=6, n_actions=9, n_hidden=200, n_hidden2=100):
+        super(Net, self).__init__()
+
+        # Two fully-connected layers, input (state) to hidden & hidden to output (action)
+        self.fc1 = nn.Linear(n_states, n_hidden)
+        self.fc2 = nn.Linear(n_hidden, n_hidden2)
+        self.out = nn.Linear(n_hidden2, n_actions)
+
+    def forward(self, x):               #x為當前狀態
+        x1 = self.fc1(x)
+        h1 = F.sigmoid(x1) 
+        x2 = self.fc2(h1)                 
+        h2 = F.sigmoid(x2)                    #連接輸入層到隱藏層，並使用激勵函數ReLU
+        actions_value = self.out(h2)     #連接隱藏層到輸出層，並輸出動作
+        return actions_value
+
+#讀取存好的模型
+model = Net()
+model_location = "8000_E700_200x100n_v5_test6_7.pth"
+
+#讀參數
+weights = torch.load(model_location, map_location=lambda storage, loc: storage)
+model.load_state_dict(weights)
+w_list = [i for i in weights]
+
+#把參數內容畫出來
+for i,p in enumerate(model.parameters()):
+    print('{}\t{}'.format(w_list[i], p.size()))
+    if((i+1)%2==0):
+        print()
+
+# 建立 TCP/IP socket
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# 綁定 socket 到本地端口 8888
+server_address = ('127.0.0.1', 8888)
+print(f"正在啟動位於 {server_address[0]} 埠口 {server_address[1]} 的伺服器...")
+server_socket.bind(server_address)
+
+# 開始監聽連接
+server_socket.listen(1)
+print('等待連接...')
+# 等待連接
+client_socket, client_address = server_socket.accept()
+while True:
+    # 接收數據
+    data = client_socket.recv(1024)
+    #把接收來的資料拆分 做轉換
+    state = data.decode().split(",")
+    state_int = list(map(float, state))
+    state1 = torch.unsqueeze(torch.FloatTensor(state_int), 0)
+    #把狀態餵進去模型
+    actions_value = model(state1)
+    #選擇最大Q-Value的動作
+    action = torch.max(actions_value, 1)[1].data.numpy()[0]
+
+    print(state1)
+    print(action)
+    print("")
+
+    # 發送動作
+    client_socket.sendall(str(action).encode())
