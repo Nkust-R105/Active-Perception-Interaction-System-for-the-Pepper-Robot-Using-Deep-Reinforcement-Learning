@@ -1,0 +1,187 @@
+import torch
+from torch import nn
+import torch.nn.functional as F
+import os
+import pyzenbo
+from pyzenbo.modules.dialog_system import RobotFace
+from pyzenbo.modules.error_code import code_to_description
+import threading
+import numpy as np
+
+
+host = '192.168.0.156'
+sdk = pyzenbo.connect(host)
+ep=10000
+index_x = 'x'
+index_y = 'y'
+index_height = 'height'
+index_width = 'width'
+timeout1 = 1
+a = 1
+is_looping = True
+
+class Net(nn.Module):
+    def __init__(self, n_states=3, n_actions=6, n_hidden=128):
+        super(Net, self).__init__()
+
+        # Two fully-connected layers, input (state) to hidden & hidden to output (action)
+        self.fc1 = nn.Linear(n_states, n_hidden)
+        self.out = nn.Linear(n_hidden, n_actions)
+
+    def forward(self, x):               #x為當前狀態
+        x = self.fc1(x)                 
+        x = F.relu(x)                   #連接輸入層到隱藏層，並使用激勵函數ReLU
+        actions_value = self.out(x)     #連接隱藏層到輸出層，並輸出動作
+        return actions_value
+
+
+
+
+model = Net()
+
+model_location = r"C:\Users\steven\OneDrive\桌面\進度\Zenbo junior\v2\6a_{0}.pth".format(ep)
+
+
+#確認檔案是否存在
+if os.path.isfile(model_location):
+    print("yesyes")
+else:
+    print("nonono")    
+
+
+weights = torch.load(model_location, map_location=lambda storage, loc: storage)
+
+model.load_state_dict(weights)
+
+w_list = [i for i in weights]
+
+'''
+for i,p in enumerate(model.parameters()):
+    print('{}\t{}'.format(w_list[i], p.size()))
+    if((i+1)%2==0):
+        print()
+'''
+
+def on_state_change(serial, cmd, error, state):
+    """msg = 'on_state_change serial:{}, cmd:{}, error:{}, state:{}'
+    print(msg.format(serial, cmd, error, state))"""
+    if error:
+        print('on_state_change error:', code_to_description(error))
+
+
+def on_result(**kwargs):
+    """print('on_result', kwargs)"""
+
+
+
+
+def on_vision(*args):
+    #print(args)
+    faceLocCam = args[0][0]['context']['nameValuePairs']['faceLocCam']
+    faceLocCam_x = float(faceLocCam[faceLocCam.index(index_x)+3:faceLocCam.index(index_y)-2])
+    faceLocCam_y = float(faceLocCam[faceLocCam.index(index_y)+3:faceLocCam.index('}')])
+    faceLocCam_height = float(faceLocCam[faceLocCam.index(index_height)+9:faceLocCam.index(index_width)-4])
+    faceLocCam_width = float(faceLocCam[faceLocCam.index(index_width)+8:faceLocCam.index(index_x)-2])
+
+    y_degree = float(40*(1-faceLocCam_y))
+    
+    print("X={0},Y={1},height={2},width={3}".format(faceLocCam_x,faceLocCam_y,faceLocCam_height,faceLocCam_width))
+    #print("xxxxxxx", faceLocCam_x)
+    #print("yyyyyyy", faceLocCam_y)
+
+    #實際大小
+
+    #real_x = faceLocCam_x * 640
+    #real_y = faceLocCam_y * 480
+
+    #real_w = faceLocCam_width*640
+    #real_h = faceLocCam_height*480
+
+    #height_width = ((real_w*real_h)-15)/285
+    height_width = faceLocCam_height*faceLocCam_width-0.001
+    #print("height*width==", height_width)
+
+
+    #state = int(real_xy)
+
+
+    #data = [real_x,real_y,height_width]
+    data=[faceLocCam_x, faceLocCam_y, height_width]
+    print(data)
+    print(".......................................................................")
+    data2 = torch.unsqueeze(torch.FloatTensor(data), 0)
+    print("tensor", model(data2))
+
+    index = torch.argmax(model(data2))
+    print("index==", index)    #tensor最大值位置
+
+
+    if index == 0:
+        print("往右")
+        #sdk.robot.set_expression(RobotFace.HAPPY, 'turn right')
+        sdk.robot.speak("turn right")
+        sdk.motion.move_body(relative_x=0, relative_y=0, relative_theta_degree=10, speed_level=1, sync=True, timeout=None)
+
+    if index == 1:
+        print("往左")    
+        #sdk.robot.set_expression(RobotFace.HAPPY, 'turn left')
+        sdk.robot.speak("turn left")
+        sdk.motion.move_body(relative_x=0, relative_y=0, relative_theta_degree=-10, speed_level=1, sync=True, timeout=None)
+
+    if index == 2:
+        print("往上")
+        #sdk.robot.set_expression(RobotFace.HAPPY, 'face up')
+        sdk.robot.speak("face up")
+        sdk.motion.move_head(yaw_degree=0, pitch_degree=y_degree+2, speed_level=1, sync=True, timeout=None)
+
+    if index == 3:
+        print("往下")     
+        #sdk.robot.set_expression(RobotFace.HAPPY, 'face down')
+        sdk.robot.speak("face down")
+        sdk.motion.move_head(yaw_degree=0, pitch_degree=y_degree-2, speed_level=1, sync=True, timeout=None)   
+
+    if index == 4:
+        print("往前")     
+        #sdk.robot.set_expression(RobotFace.HAPPY, 'face down')
+        sdk.robot.speak("turn forward")
+        sdk.motion.move_body(relative_x=0.1, relative_y=0, relative_theta_degree=0, speed_level=1, sync=True, timeout=None)      
+
+    if index == 5:
+        print("往後")     
+        #sdk.robot.set_expression(RobotFace.HAPPY, 'face down')
+        sdk.robot.speak("turn back")
+        sdk.motion.move_body(relative_x=0, relative_y=0, relative_theta_degree=180, speed_level=3, sync=True, timeout=None)
+        sdk.motion.move_body(relative_x=0.05, relative_y=0, relative_theta_degree=0, speed_level=1, sync=True, timeout=None)
+        sdk.motion.move_body(relative_x=0, relative_y=0, relative_theta_degree=180, speed_level=3, sync=True, timeout=None)          
+
+
+
+def not_found():
+    print('not_found')
+
+def detect_success():
+    print('found')
+
+
+event_vision = threading.Event()
+#sdk.on_state_change_callback = on_state_change
+sdk.on_result_callback = on_result
+sdk.on_vision_callback = on_vision
+
+
+try:
+    
+    while a < 10:
+        result = sdk.vision.request_detect_face(interval=2.5,enable_debug_preview=True,enable_candidate_obj=True,sync=True ,timeout=10)
+        print(result)
+        is_detect_face = event_vision.wait(timeout1)
+        sdk.vision.cancel_detect_face()
+        if is_detect_face:
+            detect_success()
+        else:
+            not_found()
+        a += 1
+       
+finally:
+    sdk.vision.cancel_detect_face()
+    sdk.release()    
