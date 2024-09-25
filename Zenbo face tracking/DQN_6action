@@ -1,0 +1,256 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import gym
+import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt1
+import matplotlib.pyplot as plt2
+from matplotlib.font_manager import FontProperties
+import torchvision.models as models
+ep=10
+pt_episode = np.zeros((ep,), dtype=int)
+pt_reward = np.zeros((ep,), dtype=int)
+pt_loss = np.zeros((ep,), dtype=int)
+pt_step = np.zeros((ep,), dtype=int)
+global global_loss
+global_loss = 0
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+#定義網路
+class Net(nn.Module):
+    def __init__(self, n_states, n_actions, n_hidden):
+        super(Net, self).__init__()
+
+        # Two fully-connected layers, input (state) to hidden & hidden to output (action)
+        self.fc1 = nn.Linear(n_states, n_hidden)
+        self.out = nn.Linear(n_hidden, n_actions)
+
+    def forward(self, x):               #x為當前狀態
+        x = self.fc1(x)                 
+        x = F.relu(x)                   #連接輸入層到隱藏層，並使用激勵函數ReLU
+        actions_value = self.out(x)     #連接隱藏層到輸出層，並輸出動作
+        return actions_value
+
+
+#定義DQN網路，包含target net 與 eval net
+class DQN(object):
+    def __init__(self, n_states, n_actions, n_hidden, batch_size, lr, epsilon, gamma, target_replace_iter, memory_capacity):
+        #產生兩個網路，target與eval
+        self.eval_net, self.target_net = Net(n_states, n_actions, n_hidden), Net(n_states, n_actions, n_hidden)
+        #初始化記憶庫，一行代表一個transition
+        self.memory = np.zeros((memory_capacity, n_states * 2 + 2)) # initialize memory, each memory slot is of size (state + next state + reward + action)
+        #Adam優化器，輸入為eval net的參數與learning rate
+        self.optimizer = torch.optim.Adam(self.eval_net.parameters(), lr=lr)
+        #均方損失函數，(loss(x,y) = (x-y)^2)
+        self.loss_func = nn.MSELoss()
+        self.memory_counter = 0
+        self.learn_step_counter = 0 # for target network update
+
+        self.n_states = n_states
+        self.n_actions = n_actions
+        self.n_hidden = n_hidden
+        self.batch_size = batch_size
+        self.lr = lr                                                                                                                                                                                              
+        self.epsilon = epsilon
+        self.gamma = gamma
+        self.target_replace_iter = target_replace_iter
+        self.memory_capacity = memory_capacity
+
+    def choose_action(self, state):
+        x = torch.unsqueeze(torch.FloatTensor(state), 0)
+
+        # epsilon-greedy
+        if np.random.uniform() < self.epsilon:                      #隨機產生0~1，若大於Epsilon，就選擇最佳動作
+            action = np.random.randint(0, self.n_actions)           #從動作中隨機抽取一個
+        else: # greedy
+            actions_value = self.eval_net(x)                            #透過評估網路獲取動作
+            action = torch.max(actions_value, 1)[1].data.numpy()[0]     #尋找最大值的動作並回傳
+
+        return action
+
+    def store_transition(self, state, action, reward, next_state):
+        # Pack the experience
+        transition = np.hstack((state, [action, reward], next_state))
+
+        #如果記憶體滿了，便覆蓋舊的資料
+        index = self.memory_counter % self.memory_capacity  #2000
+        self.memory[index, :] = transition                  #根據序列儲存記憶
+        self.memory_counter += 1
+
+    def learn(self):
+        #抽取樣本
+        sample_index = np.random.choice(self.memory_capacity, self.batch_size)  #2000個樣本取32個樣本
+        b_memory = self.memory[sample_index, :]                                 #把抽取到的樣本丟進來
+
+        #取前N_STATES個值(2個，當前狀態)
+        b_state = torch.FloatTensor(b_memory[:, :self.n_states])
+        #取N_STATES + 1 的值(1個，action)
+        b_action = torch.LongTensor(b_memory[:, self.n_states:self.n_states+1].astype(int))
+        #取N_STATES + 2 的值(1個，reward)
+        b_reward = torch.FloatTensor(b_memory[:, self.n_states+1:self.n_states+2])
+        #取倒數N_STATES個值(2個，未來狀態)
+        b_next_state = torch.FloatTensor(b_memory[:, -self.n_states:])
+
+        #用eval_net執行b_s，計算Q
+        q_eval = self.eval_net(b_state).gather(1, b_action)
+        
+        q_next = self.target_net(b_next_state).detach() # detach from graph, don't backpropagate
+        
+        q_target = b_reward + self.gamma * q_next.max(1)[0].view(self.batch_size, 1) # compute the target Q values
+        
+        loss = self.loss_func(q_eval, q_target)
+
+        # Backpropagation
+        self.optimizer.zero_grad()
+        global global_loss
+        
+        global_loss += loss
+        #print('loss : ',str(loss.item()))
+        
+        loss.backward()
+        
+        self.optimizer.step()
+
+        #目標網路的參數更新
+        self.learn_step_counter += 1
+        if self.learn_step_counter % self.target_replace_iter == 0:         #一開始及每100步更新一次參數
+            self.target_net.load_state_dict(self.eval_net.state_dict())     #把評估網路的值丟給目標網路
+
+
+if __name__ == '__main__':
+    env = gym.make('GridWorld-v3')
+    env = env.unwrapped # For cheating mode to access values hidden in the environment
+    
+    # Environment parameters
+    n_actions = 6               #動作數(上 下 左 右)
+    n_states = 3                #環境狀態(x,y)
+
+    #超參數
+    n_hidden = 128               #神經元
+    batch_size = 32
+    lr = 0.01                   # learning rate
+    epsilon = 0.1               # epsilon-greedy, factor to explore randomly
+    gamma = 0.9                 # reward discount factor
+    target_replace_iter = 100   #目標網路的更新頻率
+    memory_capacity = 2000      #記憶體容量
+    n_episodes =  ep
+
+    # Create DQN
+    dqn = DQN(n_states, n_actions, n_hidden, batch_size, lr, epsilon, gamma, target_replace_iter, memory_capacity)
+
+    # Collect experience
+    for i_episode in range(n_episodes):     #迭代
+        t = 0 # timestep
+        rewards = 0 # accumulate rewards for each episode
+        state = env.reset() # reset environment to initial state for each episode
+        while True:
+            env.render()
+            pt_episode[i_episode] = i_episode +1
+            # Agent takes action
+            action = dqn.choose_action(state) # choose an action based on DQN
+            next_state, reward, done, info = env.step(action) # do the action, get the reward
+
+            # Keep the experience in memory
+            dqn.store_transition(state, action, reward, next_state)
+
+            #累加reward
+            rewards += reward
+
+            # If enough memory stored, agent learns from them via Q-learning
+            if dqn.memory_counter > memory_capacity:
+                dqn.learn()
+
+            #狀態轉移
+            state = next_state
+            #判斷是否達到結束條件
+            if done == True:
+                #print(global_loss)
+                print('Episode {} finished after {} timesteps, total rewards {}'.format(i_episode, t+1, rewards))
+                pt_reward[i_episode] = rewards
+                #print('reward : ', str(pt_reward[i_episode]))
+                pt_step[i_episode] = (t + 1)
+                pt_loss[i_episode] = global_loss
+                #print('loss : ',str(pt_loss[i_episode]))
+                global_loss = 0
+                break
+                
+            t += 1
+        
+    
+    env.close()
+    torch.save(dqn.target_net.state_dict(), "6a_{0}.pth".format(ep))
+if ep>=1000:
+    interval = ep/10
+else:
+    interval = 1
+sampled_episode = pt_episode[::interval]
+sampled_reward = pt_reward[::interval]
+sampled_loss = pt_loss[::interval]
+sampled_step = pt_step[::interval]
+with open("{0}_data.txt".format(ep), "w") as file:
+    file.write("episode,reward,loss,step\n")  # 写入表头
+    for episode, reward,loss,step in zip(sampled_episode, sampled_reward,sampled_loss,sampled_step):
+        file.write(f"{episode},{reward},{loss},{step}\n")
+with open("{0}_data_a.txt".format(ep), "w") as file:
+    file.write("episode,reward,loss,step\n")  # 写入表头
+    for episode, reward,loss,step in zip(pt_episode, pt_reward,pt_loss,pt_step):
+        file.write(f"{episode},{reward},{loss},{step}\n")
+        
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 10), dpi=100, linewidth=2)
+ax1.plot(pt_episode, pt_reward, color='r', label="Reward")
+ax1.set_title("Reward", fontproperties="myfont", x=0.5, y=1.03)
+ax1.tick_params(axis='both', labelsize=10)  # 设置刻度字体大小
+ax1.set_xlabel("episode", fontsize=30, labelpad=15)
+ax1.set_ylabel("reward", fontsize=30, labelpad=20)
+
+
+ax2.plot(sampled_episode, sampled_reward, color='r', label="Reward")
+ax2.set_title("Reward", fontproperties="myfont", x=0.5, y=1.03)
+ax2.tick_params(axis='both', labelsize=10)  # 设置刻度字体大小
+ax2.set_xlabel("episode", fontsize=30, labelpad=15)
+ax2.set_ylabel("reward", fontsize=30, labelpad=20)
+# 畫出圖片
+fig.tight_layout()
+fig.savefig("DDQN_reward_plot_{0}.png".format(ep))
+plt.show()
+
+#--------------------------------------------------------------------------
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 10), dpi=100, linewidth=2)
+ax1.plot(pt_episode,pt_loss,color = 'r', label="loss")
+ax1.set_title("loss", fontproperties="myfont", x=0.5, y=1.03)
+ax1.tick_params(axis='both', labelsize=10)  # 设置刻度字体大小
+ax1.set_xlabel("episode", fontsize=30, labelpad=15)
+ax1.set_ylabel("loss", fontsize=30, labelpad=20)
+# 顯示出線條標記位置
+#plt.legend(loc = "best", fontsize=20)
+ax2.plot(sampled_episode,sampled_loss,color = 'r', label="loss")
+ax2.set_title("loss", fontproperties="myfont", x=0.5, y=1.03)
+ax2.tick_params(axis='both', labelsize=10)  # 设置刻度字体大小
+ax2.set_xlabel("episode", fontsize=30, labelpad=15)
+ax2.set_ylabel("loss", fontsize=30, labelpad=20)
+# 畫出圖片
+fig.tight_layout()
+fig.savefig("DDQN_loss_plot_{0}.png".format(ep))
+plt.show()
+
+#--------------------------------------------------------------------------
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 10), dpi=100, linewidth=2)
+ax1.plot(pt_episode,pt_step,color = 'r', label="step")
+ax1.set_title("step", fontproperties="myfont", x=0.5, y=1.03)
+ax1.tick_params(axis='both', labelsize=10)  # 设置刻度字体大小
+ax1.set_xlabel("episode", fontsize=30, labelpad=15)
+ax1.set_ylabel("step", fontsize=30, labelpad=20)
+
+ax2.plot(sampled_episode,sampled_step,color = 'r', label="step")
+ax2.set_title("step", fontproperties="myfont", x=0.5, y=1.03)
+ax2.tick_params(axis='both', labelsize=10)  # 设置刻度字体大小
+ax2.set_xlabel("episode", fontsize=30, labelpad=15)
+ax2.set_ylabel("step", fontsize=30, labelpad=20)
+#plt.legend(loc = "best", fontsize=20)
+
+# 畫出圖片
+fig.tight_layout()
+fig.savefig("DDQN_step_plot_{0}.png".format(ep))
+plt2.show()
